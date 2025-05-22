@@ -1,0 +1,50 @@
+{
+  "runSettings": {
+    "temperature": 1.0,
+    "model": "models/gemini-2.5-flash-preview-04-17",
+    "topP": 0.95,
+    "topK": 64,
+    "maxOutputTokens": 65536,
+    "safetySettings": [{
+      "category": "HARM_CATEGORY_HARASSMENT",
+      "threshold": "OFF"
+    }, {
+      "category": "HARM_CATEGORY_HATE_SPEECH",
+      "threshold": "OFF"
+    }, {
+      "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+      "threshold": "OFF"
+    }, {
+      "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+      "threshold": "OFF"
+    }],
+    "responseMimeType": "text/plain",
+    "enableCodeExecution": false,
+    "enableSearchAsATool": false,
+    "enableBrowseAsATool": false,
+    "enableAutoFunctionResponse": false
+  },
+  "systemInstruction": {
+  },
+  "chunkedPrompt": {
+    "chunks": [{
+      "text": "さらにテストに追加します。",
+      "role": "user",
+      "tokenCount": 6
+    }, {
+      "text": "**Expanding Test Scenarios**\n\nI\u0027ve determined that the user wants to augment the existing test. Specifically, the instruction \"sarani tesuto ni tsuika shimasu\" signals an intention to expand upon the testing framework with additional elements. My next step will be to interpret the full implications of this expansion request.\n\n\n**Defining Addition Details**\n\nI\u0027m now focused on understanding the nature of the \"additions.\" The user wants to expand the test; however, the lack of specifics presents a challenge. I need clarification on what is being added to the existing test - scenarios, questions, or perhaps something else entirely. Therefore, I\u0027m generating appropriate prompts in Japanese to elicit the precise details the user wishes to incorporate. I\u0027m ready to receive them.\n\n\n**Defining Scope of Addition**\n\nI understand the user\u0027s intent to add to the test. Currently, I\u0027m focusing on clarifying what the nature of these additions will be. I\u0027ve considered several response options in Japanese and will refine them. I will seek details about the specific test items and content the user wishes to incorporate. I am ready to facilitate a smooth expansion of the existing process.\n\n\n**Defining Expansion Parameters**\n\nI\u0027ve understood the user\u0027s intent to add to the existing test. I\u0027ve formulated a response in Japanese, aimed at clarifying the specific additions the user wishes to make. The response is polite, yet direct, and seeks details about the new items, conditions, or questions. I\u0027m ready for the user\u0027s input.\n\n\n",
+      "role": "model",
+      "tokenCount": 318,
+      "isThought": true
+    }, {
+      "text": "はい、承知いたしました。\n\nテストに追加する内容について教えてください。\nどのような項目や条件、質問などを追加したいですか？\n\n詳細を教えていただければ、それに基づいて対応します。",
+      "role": "model",
+      "finishReason": "STOP",
+      "tokenCount": 40
+    }],
+    "pendingInputs": [{
+      "text": "",
+      "role": "user"
+    }]
+  }
+}

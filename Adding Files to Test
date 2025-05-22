@@ -1,0 +1,50 @@
+{
+  "runSettings": {
+    "temperature": 1.0,
+    "model": "models/gemini-2.5-flash-preview-04-17",
+    "topP": 0.95,
+    "topK": 64,
+    "maxOutputTokens": 65536,
+    "safetySettings": [{
+      "category": "HARM_CATEGORY_HARASSMENT",
+      "threshold": "OFF"
+    }, {
+      "category": "HARM_CATEGORY_HATE_SPEECH",
+      "threshold": "OFF"
+    }, {
+      "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+      "threshold": "OFF"
+    }, {
+      "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+      "threshold": "OFF"
+    }],
+    "responseMimeType": "text/plain",
+    "enableCodeExecution": false,
+    "enableSearchAsATool": false,
+    "enableBrowseAsATool": false,
+    "enableAutoFunctionResponse": false
+  },
+  "systemInstruction": {
+  },
+  "chunkedPrompt": {
+    "chunks": [{
+      "text": "テストでファイルを追加します。",
+      "role": "user",
+      "tokenCount": 7
+    }, {
+      "text": "**Noting File Addition**\n\nI understand the user is mentioning file addition in a testing context. I\u0027m inferring this could be a report on such a task, or a question about it. My thinking leans toward confirming understanding and possibly offering support, depending on the context.\n\n\n**Understanding the Task**\n\nI\u0027ve processed the user\u0027s statement about adding files during testing. I\u0027ve considered several response options, ranging from simple acknowledgement to offering assistance. The uncertainty of the user\u0027s intent requires a careful approach. I\u0027m leaning toward a confirming reply, perhaps followed by a question to clarify their needs, offering help if appropriate. My goal is to ensure smooth communication and support.\n\n\n**Clarifying User Intent**\n\nI\u0027m now focusing on the user\u0027s intent, and the \"file addition during testing\" statement. I\u0027ve narrowed down the potential responses. First, a simple acknowledgement, like \"Okay,\" is appropriate. Then, I\u0027ll need to gauge the user\u0027s needs. Offering support proactively might be seen as assuming too much, so I\u0027m thinking a clarifying question, such as, \"Do you have any questions about that?\" would be ideal. I\u0027m leaning toward a concise, open-ended response.\n\n\n**Deciding the Response**\n\nNow, I\u0027m firmly set on the appropriate response: \"承知いたしました.\" This choice reflects a concise yet polite acknowledgement of the user\u0027s statement. The user\u0027s intent remains somewhat ambiguous, so a simple confirmation is the most prudent path. I\u0027ve considered more detailed options, but this direct reply is most fitting, allowing the user to guide the conversation further if needed. I believe this demonstrates attentiveness without making assumptions.\n\n\n",
+      "role": "model",
+      "tokenCount": 355,
+      "isThought": true
+    }, {
+      "text": "はい、承知いたしました。",
+      "role": "model",
+      "finishReason": "STOP",
+      "tokenCount": 7
+    }],
+    "pendingInputs": [{
+      "text": "",
+      "role": "user"
+    }]
+  }
+}
