@@ -1,3 +1,4 @@
+```
 function Test-StringFormat-Strict {
     param(
         [string]$InputString
@@ -42,9 +43,9 @@ try {
 catch {
     Write-Warning $_
 }
+```
 
-
-
+```
 # テスト用の文字列
 $string = 'PRODUCT-123'
 
@@ -61,3 +62,4 @@ if ($string -match '^(?<TEMP>\w+)-(?<ALL>\d{3})') {
     Write-Host "TEMP の値: $($matches.TEMP)" # ← 'PRODUCT' が取り出せる
     Write-Host "ALL の値: $($matches.ALL)"   # ← '123' が取り出せる
 }
+```
