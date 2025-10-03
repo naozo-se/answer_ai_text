@@ -1,83 +1,251 @@
-いえ、引数自体は存在しており、MyBatis Generator 1.4.1で**間違いなく利用可能**です。ご安心ください。
+はい、承知いたしました。
+Pythonを使ったAWS LambdaでDynamoDBの項目を**登録・更新・取得**する3つの処理について、それぞれのサンプルコードを解説します。
 
-`unknown argument` というエラーは、引数名が間違っている場合だけでなく、バッチファイルの変数の展開方法などが原因で、コマンド全体が予期せぬ文字列としてJavaに渡されてしまった場合にも発生します。
-
-おそらく、前の手順で提示したバッチファイル内の変数の設定方法と、Windowsのコマンドプロンプトの相性があまり良くなかったようです。大変失礼いたしました。
-
------
-
-### \#\# 原因と解決策
-
-より確実で、引数の解釈ミスが起こらないように、`if` と `goto` を使って処理を完全に分岐させる方法にバッチファイルを修正しましょう。
-
-この方法であれば、変数を途中で結合するのではなく、「特定テーブル用の実行コマンド」と「全テーブル用の実行コマンド」を完全に分けて記述するため、最も安全で確実です。
+ここでは、API GatewayとLambdaを連携させて、HTTPリクエストに応じて処理を振り分ける構成を想定しています。
 
 -----
 
-### \#\# 最終的なバッチファイルの修正案
+### 準備
 
-お手数ですが、以下の内容で `generate.bat` を完全に置き換えてみてください。
+#### 1\. DynamoDBテーブル
 
-**▼ generate.bat (最終版)**
+まず、DynamoDBにテーブルを作成しておきます。ここでは例として、以下のようなシンプルなテーブルを考えます。
 
-```bat
-@echo off
-rem --- ここから設定 ---
+  * **テーブル名**: `users`
+  * **パーティションキー**: `userId` (文字列)
 
-set GENERATOR_JAR=mybatis-generator-core-1.4.1.jar
-set JDBC_DRIVER_JAR=postgresql-42.7.3.jar
-set CONFIG_FILE=generatorConfig.xml
+#### 2\. IAMロール
 
-rem ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-rem  特定のテーブルだけを生成したい場合に、カンマ区切りで指定します。
-rem  (例: set TARGET_TABLES=public.users,public.orders)
-rem  全てを生成する場合は、この行を空にします (set TARGET_TABLES=)
-rem ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-set TARGET_TABLES=public.users
+Lambda関数にアタッチするIAMロールには、DynamoDBへのアクセス許可が必要です。最低限、以下のポリシーをアタッチしてください。
 
-rem --- 設定はここまで ---
+  * `AmazonDynamoDBFullAccess` (テスト用) または、特定のテーブルに限定したより厳格なポリシー。
 
-echo ===================================================
-echo   MyBatis Generator を実行します...
-echo ===================================================
+-----
 
-rem TARGET_TABLESが空かどうかで処理を分岐
-if "%TARGET_TABLES%"=="" (
-    goto :RUN_ALL_TABLES
-) else (
-    goto :RUN_SPECIFIC_TABLES
-)
+### 1\. 登録 (Create)
 
+新しい項目をDynamoDBに登録するLambda関数です。HTTPの`POST`メソッドで呼び出されることを想定しています。
 
-:RUN_SPECIFIC_TABLES
-    echo.
-    echo   >> 特定のテーブルを対象にします: %TARGET_TABLES%
-    echo.
-    java -cp "%GENERATOR_JAR%;%JDBC_DRIVER_JAR%" org.mybatis.generator.api.ShellRunner -configfile "%CONFIG_FILE%" -overwrite -fullyqualifiedtablenames %TARGET_TABLES%
-    goto :END
+**`create_item.py`**
 
+```python
+import json
+import boto3
+import os
+import uuid
 
-:RUN_ALL_TABLES
-    echo.
-    echo   >> 全てのテーブルを対象にします
-    echo.
-    java -cp "%GENERATOR_JAR%;%JDBC_DRIVER_JAR%" org.mybatis.generator.api.ShellRunner -configfile "%CONFIG_FILE%" -overwrite
-    goto :END
+# DynamoDBリソースを初期化
+dynamodb = boto3.resource('dynamodb')
+# 環境変数からテーブル名を取得
+table_name = os.environ.get('DYNAMODB_TABLE', 'users')
+table = dynamodb.Table(table_name)
 
+def lambda_handler(event, context):
+    """
+    HTTP POSTリクエストのボディに含まれるデータを使ってDynamoDBに新しい項目を登録する
+    """
+    try:
+        # リクエストボディをJSONとしてパース
+        body = json.loads(event.get('body', '{}'))
 
-:END
-    echo.
-    echo ===================================================
-    echo   処理が完了しました。
-    echo ===================================================
-    pause
+        # 必須項目の存在チェック
+        if 'name' not in body or 'email' not in body:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'name and email are required'})
+            }
 
+        # 新しい項目データを作成
+        # userIdは自動で生成する
+        item = {
+            'userId': str(uuid.uuid4()),
+            'name': body['name'],
+            'email': body['email']
+        }
+
+        # DynamoDBに項目を登録 (put_item)
+        table.put_item(Item=item)
+
+        # 成功レスポンスを返す
+        return {
+            'statusCode': 201, # 201 Created
+            'headers': {
+                'Content-Type': 'application/json'
+            },
+            'body': json.dumps(item)
+        }
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': str(e)})
+        }
 ```
 
-### \#\# 変更点のポイント
+**このコードのポイント**
 
-  * `if "%TARGET_TABLES%"==""` という条件文で、変数 `TARGET_TABLES` が空かどうかを判定しています。
-  * `goto` というコマンドを使って、変数が空の場合は `:RUN_ALL_TABLES` ラベルへ、空でない場合は `:RUN_SPECIFIC_TABLES` ラベルへ処理をジャンプさせています。
-  * これにより、実行される`java`コマンドは完全に分離され、引数が誤って解釈される可能性がなくなります。
+  * **`uuid.uuid4()`**: 新しいユーザーのために一意のIDを自動生成しています。
+  * **`table.put_item(Item=item)`**: DynamoDBに新しい項目を追加する中心的な処理です。`Item`引数に辞書形式でデータを渡します。
 
-この修正版のバッチファイルで、再度 `TARGET_TABLES` にテーブル名を設定して実行してみてください。今度こそ意図した通りに動作するはずです。
+-----
+
+### 2\. 更新 (Update)
+
+既存の項目を更新するLambda関数です。HTTPの`PUT`または`PATCH`メソッドで呼び出されることを想定しています。
+
+**`update_item.py`**
+
+```python
+import json
+import boto3
+import os
+
+dynamodb = boto3.resource('dynamodb')
+table_name = os.environ.get('DYNAMODB_TABLE', 'users')
+table = dynamodb.Table(table_name)
+
+def lambda_handler(event, context):
+    """
+    指定されたuserIdの項目を更新する
+    """
+    try:
+        # URLのパスパラメータからuserIdを取得
+        path_parameters = event.get('pathParameters', {})
+        user_id = path_parameters.get('userId')
+
+        if not user_id:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'userId is required in path'})
+            }
+
+        # リクエストボディから更新内容を取得
+        body = json.loads(event.get('body', '{}'))
+
+        # 更新式と属性値を動的に構築
+        update_expression = "SET "
+        expression_attribute_values = {}
+        expression_attribute_names = {} # 予約語を避けるために使用
+        
+        # 更新可能なフィールドをループ
+        for key, value in body.items():
+            # キーが予約語でないことを確認し、安全なプレースホルダーを作成
+            placeholder_key = f"#{key}"
+            placeholder_value = f":{key}"
+            update_expression += f"{placeholder_key} = {placeholder_value}, "
+            expression_attribute_names[placeholder_key] = key
+            expression_attribute_values[placeholder_value] = value
+
+        # 最後のカンマとスペースを削除
+        update_expression = update_expression.rstrip(', ')
+
+        if not expression_attribute_values:
+             return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'No update fields provided'})
+            }
+
+        # DynamoDBの項目を更新 (update_item)
+        response = table.update_item(
+            Key={'userId': user_id},
+            UpdateExpression=update_expression,
+            ExpressionAttributeValues=expression_attribute_values,
+            ExpressionAttributeNames=expression_attribute_names,
+            ReturnValues="UPDATED_NEW"  # 更新後の項目を返す
+        )
+
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'application/json'
+            },
+            'body': json.dumps(response['Attributes'])
+        }
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': str(e)})
+        }
+```
+
+**このコードのポイント**
+
+  * **`pathParameters`**: API Gatewayで `/users/{userId}` のようにパスを設定した場合、`userId`をここから取得します。
+  * **`UpdateExpression`**: `"SET #name = :name, #email = :email"` のような更新クエリを動的に作成します。
+  * **`ExpressionAttributeNames`**: `name`がDynamoDBの予約語である可能性があるため、`#name`のようなプレースホルダーで安全に扱います。
+  * **`table.update_item(...)`**: 項目を更新するメソッドです。`Key`で対象を指定し、`UpdateExpression`で更新内容を指示します。
+
+-----
+
+### 3\. 取得 (Get)
+
+特定の項目を取得するLambda関数です。HTTPの`GET`メソッドで呼び出されることを想定しています。
+
+**`get_item.py`**
+
+```python
+import json
+import boto3
+import os
+
+dynamodb = boto3.resource('dynamodb')
+table_name = os.environ.get('DYNAMODB_TABLE', 'users')
+table = dynamodb.Table(table_name)
+
+def lambda_handler(event, context):
+    """
+    指定されたuserIdの項目を取得する
+    """
+    try:
+        # クエリパラメータまたはパスパラメータからuserIdを取得
+        user_id = event.get('queryStringParameters', {}).get('userId')
+        if not user_id:
+             user_id = event.get('pathParameters', {}).get('userId')
+
+        if not user_id:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'userId is required'})
+            }
+
+        # DynamoDBから項目を取得 (get_item)
+        response = table.get_item(
+            Key={
+                'userId': user_id
+            }
+        )
+
+        # 項目が存在するかチェック
+        item = response.get('Item')
+        if item:
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json'
+                },
+                'body': json.dumps(item)
+            }
+        else:
+            return {
+                'statusCode': 404, # 404 Not Found
+                'body': json.dumps({'error': 'User not found'})
+            }
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': str(e)})
+        }
+```
+
+**このコードのポイント**
+
+  * **`queryStringParameters`**: API Gatewayで `/users?userId=xxx` のようなリクエストを想定しています。
+  * **`table.get_item(Key=key)`**: 指定されたキー（この場合は`userId`）に一致する単一の項目を取得します。
+  * **`response.get('Item')`**: 取得結果は`'Item'`というキーの中に格納されています。存在しない場合は`None`が返るため、404エラーのハンドリングに使えます。
+
+これらのコードをベースに、ご自身の要件に合わせてエラーハンドリングや入力バリデーションを強化してご活用ください。
