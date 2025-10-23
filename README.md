@@ -1,60 +1,63 @@
 ```
-def delete_all_items_for_partition_key(table_name, pk_name, pk_value, sk_name):
-    """
-    指定されたパーティションキーを持つすべてのDynamoDBアイテムを削除します。
+import boto3
 
-    Args:
-        table_name (str): 対象のテーブル名
-        pk_name (str): パーティションキーの属性名
-        pk_value (any): 削除対象のパーティションキーの値
-        sk_name (str): ソートキーの属性名
-    """
-    dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table(table_name)
+# DynamoDBリソースを取得
+dynamodb = boto3.resource('dynamodb')
+# 'YourTableName', 'YourPKName', 'YourSKName' は実際の値に置き換えてください
+table_name = 'YourTableName'
+pk_name = 'YourPKName' # (例: 'UserID')
+sk_name = 'YourSKName' # (例: 'Timestamp')
+table = dynamodb.Table(table_name)
+
+# PKをキーとし、SKが最大のアイテムを保持する辞書
+max_sk_items = {}
+
+# Scanオペレーションのパラメータ
+scan_kwargs = {}
+
+print(f"Scanning table '{table_name}' to find max SK for each PK...")
+
+try:
+    # ページネーション（データが1MBを超える場合）に対応
+    done = False
+    start_key = None
+    total_scanned = 0
     
-    # --- 1. 削除対象のアイテムをQueryで検索 ---
-    print(f"Searching for items in '{table_name}' with {pk_name} = '{pk_value}'...")
-    
-    # キーを格納するリスト
-    keys_to_delete = []
-    
-    # ページネーションを考慮して全アイテムを検索
-    query_params = {
-        'KeyConditionExpression': Key(pk_name).eq(pk_value)
-    }
-    
-    while True:
-        response = table.query(**query_params)
+    while not done:
+        if start_key:
+            scan_kwargs['ExclusiveStartKey'] = start_key
+        
+        response = table.scan(**scan_kwargs)
+        
         items = response.get('Items', [])
+        total_scanned += len(items)
         
-        if not items:
-            break # ループの初回でここに来たら、対象アイテムは0件
-
         for item in items:
-            # batch_write_itemで削除するために、完全なキー（PKとSK）を収集
-            keys_to_delete.append({
-                pk_name: item[pk_name],
-                sk_name: item[sk_name]
-            })
+            pk_val = item[pk_name]
+            sk_val = item[sk_name]
             
-        # 応答に 'LastEvaluatedKey' がなければ、それが最後のページ
-        if 'LastEvaluatedKey' not in response:
-            break
-        
-        # 次のページの開始キーを設定
-        query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+            # 1. このPKがまだ辞書にない場合
+            # 2. または、このPKの既存アイテムより、現在のアイテムのSKが大きい場合
+            if pk_val not in max_sk_items or sk_val > max_sk_items[pk_val][sk_name]:
+                # アイテムを更新（上書き）
+                max_sk_items[pk_val] = item
+                
+        # 次のスキャン開始位置を取得
+        start_key = response.get('LastEvaluatedKey', None)
+        # LastEvaluatedKey がなければスキャン終了
+        done = start_key is None
 
-    if not keys_to_delete:
-        print("No items found to delete.")
-        return
+    # 辞書の値（Items）をリストに変換
+    final_results = list(max_sk_items.values())
 
-    # --- 2. batch_write_itemで一括削除 ---
-    print(f"Found {len(keys_to_delete)} items. Starting batch deletion...")
+    print(f"\nScan complete. Scanned {total_scanned} total items.")
+    print(f"Found {len(final_results)} unique PKs with their max SK item.")
     
-    # batch_writerを使うと、25件ごとの分割やリトライ処理を自動的にハンドリングしてくれる
-    with table.batch_writer() as batch:
-        for key in keys_to_delete:
-            batch.delete_item(Key=key)
-            
-    print("Deletion completed successfully.")
+    # # (オプション) 結果の表示
+    # for item in final_results:
+    #     print(item)
+
+except Exception as e:
+    print(f"Error scanning table: {e}")
+    
 ```
