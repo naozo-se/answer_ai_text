@@ -1,63 +1,27 @@
 ```
-import boto3
+# 1. 【ローカル設定の削除】
+# ※変更した可能性のあるリポジトリのフォルダ内で実行してください
+git config --local --unset core.autocrlf
 
-# DynamoDBリソースを取得
-dynamodb = boto3.resource('dynamodb')
-# 'YourTableName', 'YourPKName', 'YourSKName' は実際の値に置き換えてください
-table_name = 'YourTableName'
-pk_name = 'YourPKName' # (例: 'UserID')
-sk_name = 'YourSKName' # (例: 'Timestamp')
-table = dynamodb.Table(table_name)
+# 2. 【グローバル設定の削除】
+git config --global --unset core.autocrlf
 
-# PKをキーとし、SKが最大のアイテムを保持する辞書
-max_sk_items = {}
 
-# Scanオペレーションのパラメータ
-scan_kwargs = {}
+# --- 以下は確認用のコマンドです ---
 
-print(f"Scanning table '{table_name}' to find max SK for each PK...")
+# 3. 【最終的な設定の確認】
+# --system の設定値（おそらく "true"）が表示されればOKです
+echo "--- 現在適用されている設定: ---"
+git config --get core.autocrlf
 
-try:
-    # ページネーション（データが1MBを超える場合）に対応
-    done = False
-    start_key = None
-    total_scanned = 0
-    
-    while not done:
-        if start_key:
-            scan_kwargs['ExclusiveStartKey'] = start_key
-        
-        response = table.scan(**scan_kwargs)
-        
-        items = response.get('Items', [])
-        total_scanned += len(items)
-        
-        for item in items:
-            pk_val = item[pk_name]
-            sk_val = item[sk_name]
-            
-            # 1. このPKがまだ辞書にない場合
-            # 2. または、このPKの既存アイテムより、現在のアイテムのSKが大きい場合
-            if pk_val not in max_sk_items or sk_val > max_sk_items[pk_val][sk_name]:
-                # アイテムを更新（上書き）
-                max_sk_items[pk_val] = item
-                
-        # 次のスキャン開始位置を取得
-        start_key = response.get('LastEvaluatedKey', None)
-        # LastEvaluatedKey がなければスキャン終了
-        done = start_key is None
+# 4. 【（参考）各レベルの確認】
+# --system 以外は何も表示されないはずです
+echo "--- system (デフォルト): ---"
+git config --system --get core.autocrlf
 
-    # 辞書の値（Items）をリストに変換
-    final_results = list(max_sk_items.values())
+echo "--- global (削除済み): ---"
+git config --global --get core.autocrlf
 
-    print(f"\nScan complete. Scanned {total_scanned} total items.")
-    print(f"Found {len(final_results)} unique PKs with their max SK item.")
-    
-    # # (オプション) 結果の表示
-    # for item in final_results:
-    #     print(item)
-
-except Exception as e:
-    print(f"Error scanning table: {e}")
-    
+echo "--- local (削除済み): ---"
+git config --local --get core.autocrlf
 ```
