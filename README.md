@@ -1,27 +1,83 @@
 ```
-# 1. 【ローカル設定の削除】
-# ※変更した可能性のあるリポジトリのフォルダ内で実行してください
-git config --local --unset core.autocrlf
+ご懸念はもっともです。メジャーバージョンを3つ（9系 → 10系 → 11系 → 12系）上げる場合、**「問題ない」とは言えません。**
 
-# 2. 【グローバル設定の削除】
-git config --global --unset core.autocrlf
+最大の問題は、セキュリティ修正のためだけでなく、\*\*「破壊的変更（Breaking Changes）」\*\*が含まれていることです。
 
+これは、Pillow 9系で動作していたコードが、12系ではエラーになるか、意図しない動作をする可能性があることを意味します。
 
-# --- 以下は確認用のコマンドです ---
+-----
 
-# 3. 【最終的な設定の確認】
-# --system の設定値（おそらく "true"）が表示されればOKです
-echo "--- 現在適用されている設定: ---"
-git config --get core.autocrlf
+### 把握すべき主な「破壊的変更」
 
-# 4. 【（参考）各レベルの確認】
-# --system 以外は何も表示されないはずです
-echo "--- system (デフォルト): ---"
-git config --system --get core.autocrlf
+検索したリリースノートに基づき、9系から12系に上げる際に、ほぼ確実に影響を受けるであろう最大の変更点をまとめます。
 
-echo "--- global (削除済み): ---"
-git config --global --get core.autocrlf
+#### 1\. 【最重要】リサイズ時のアンチエイリアス定数が変更 (10.0.0)
 
-echo "--- local (削除済み): ---"
-git config --local --get core.autocrlf
+これが最も影響範囲の広い変更です。
+Pillow 9系まで使われていた `Image.ANTIALIAS` は、10.0.0 で**削除されました**。
+
+もしコード内に `Image.ANTIALIAS` があると、`AttributeError` が発生してプログラムが停止します。
+
+  * **変更前 (Pillow 9.x)**
+
+    ```python
+    # これらは 10.0.0 で削除されました
+    img.resize((100, 100), Image.ANTIALIAS) 
+    img.resize((100, 100), Image.LINEAR)
+    img.resize((100, 100), Image.CUBIC)
+    ```
+
+  * **変更後 (Pillow 12.0.0)**
+    `Image.Resampling` という Enum (列挙型) クラスを使うように変更されました。
+
+    ```python
+    from PIL import Image
+
+    # ANTIALIAS の推奨される代替
+    img.resize((100, 100), Image.Resampling.LANCZOS)
+
+    # その他の代替
+    img.resize((100, 100), Image.Resampling.BILINEAR) # LINEAR の代替
+    img.resize((100, 100), Image.Resampling.BICUBIC)  # CUBIC の代替
+    ```
+
+#### 2\. `ImageMath.eval()` の削除 (12.0.0)
+
+`ImageMath.eval()` は、過去に何度も脆弱性（CVE-2023-50447など）の原因となってきた危険な関数で、ついに削除されました。
+もしこれを使っている場合、安全な代替である `ImageMath.lambda_eval()` や `ImageMath.unsafe_eval()` に書き換える必要があります。
+
+#### 3\. Python 3.9 サポートの終了 (12.0.0)
+
+Pillow 12.0.0 は Python 3.9 のサポートを終了しました。
+ただ、**Python 3.11 をお使いとのことなので、これは問題ありません。**
+
+-----
+
+### 結論と推奨される手順
+
+9系から12系へのアップグレードは、セキュリティ上\*\*「必須」**ですが、**「コードの修正と、徹底したテスト」\*\*が前提となります。
+
+安全に進めるための手順は以下の通りです。
+
+1.  **テスト環境の準備**
+
+      * 本番環境とは別に、Gitで新しいブランチを切るか、ローカルの仮想環境（Poetry, venvなど）で作業します。
+
+2.  **パッケージのアップグレード**
+
+      * `pyproject.toml` や `requirements.txt` の `pillow` のバージョンを `^12.0.0` (または `==12.0.0`) に変更し、インストールします。
+
+3.  **既知の変更点の修正**
+
+      * まず、プロジェクト全体で `Image.ANTIALIAS` を検索し、すべて `Image.Resampling.LANCZOS` （または `BICUBIC` 等）に置換します。
+
+4.  **テストの実行**
+
+      * もし `pytest` などのテストコードがあれば、すべて実行します。ここでエラーが出た箇所を修正します。
+
+5.  **目視での確認（最重要）**
+
+      * テストコードがない場合、Pillowを使っている機能（画像のリサイズ、アップロード、サムネイル生成、画像への文字描画など）が、**アップグレード前とまったく同じように動作するか**、実際に画面を操作して目視で確認してください。
+
+戸惑われるお気持ちは分かりますが、`ANTIALIAS` の修正とテストさえしっかり行えば、移行自体は可能です。
 ```
