@@ -13,3 +13,7 @@ jq --arg table "$TABLE_NAME" \
 '{($table): [.Items[] | {PutRequest: {Item: .}}]}' > backup.json
 ```
 
+
+```
+find . -maxdepth 1 -name "temp.*.txt" | sort -V | tail -n 1
+```
