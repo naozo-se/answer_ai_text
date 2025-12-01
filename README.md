@@ -89,3 +89,13 @@ def main():
 if __name__ == '__main__':
     main()
 ```
+
+```
+{
+    "partition_key": "temp_(i)",
+    "sort_key": "sort_(i)",
+    "timestamp": (timestamp),
+    "constant": "aaa"
+}
+```
+
