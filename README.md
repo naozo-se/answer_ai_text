@@ -1,4 +1,63 @@
 ```
+import boto3
+import os
+
+# ==========================================
+# 設定: 対象のテーブル名
+TABLE_NAME = "TargetTableName"
+
+# 必要であればリージョンを指定（CloudShellと同じならそのままでOK）
+REGION_NAME = os.environ.get('AWS_DEFAULT_REGION', 'ap-northeast-1')
+# ==========================================
+
+def truncate_dynamodb_table(table_name, region):
+    dynamodb = boto3.resource('dynamodb', region_name=region)
+    table = dynamodb.Table(table_name)
+    
+    # テーブルのキー設定（パーティションキー、ソートキー）を自動取得
+    # これにより、キー名が "id" 以外でも、複合キーでも動作します
+    key_names = [key['AttributeName'] for key in table.key_schema]
+    projection_expression = ", ".join([f"#{k}" for k in key_names])
+    expression_attribute_names = {f"#{k}": k for k in key_names}
+    
+    print(f"Target Table: {table_name} ({region})")
+    print(f"Detected Keys: {key_names}")
+    print("Starting truncation...")
+
+    with table.batch_writer() as batch:
+        scan_kwargs = {
+            'ProjectionExpression': projection_expression,
+            'ExpressionAttributeNames': expression_attribute_names
+        }
+        
+        done = False
+        start_key = None
+        count = 0
+        
+        while not done:
+            if start_key:
+                scan_kwargs['ExclusiveStartKey'] = start_key
+            
+            response = table.scan(**scan_kwargs)
+            items = response.get('Items', [])
+            
+            for item in items:
+                # 取得したキー情報を使って削除キーを構築
+                key_dict = {k: item[k] for k in key_names}
+                batch.delete_item(Key=key_dict)
+                count += 1
+            
+            start_key = response.get('LastEvaluatedKey', None)
+            done = start_key is None
+            print(f"\rScanned and queued {count} items...", end="")
+            
+    print(f"\nCompleted. Deleted {count} items.")
+
+if __name__ == "__main__":
+    truncate_dynamodb_table(TABLE_NAME, REGION_NAME)
+```
+
+```
 (Get-Content "ファイルのパス" -Raw).Replace("`r`n","`n") | Set-Content "ファイルのパス" -NoNewline
 ```
 
