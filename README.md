@@ -1,79 +1,72 @@
 ```python
 import boto3
+from boto3.dynamodb.conditions import Key
 import os
-from boto3.dynamodb.conditions import Attr
 
 # ==========================================
-# 設定
+# 設定項目: ここを書き換えてください
+# ==========================================
 TABLE_NAME = "TargetTableName"
-
-# 削除対象の「ソートキー」がこの文字で始まる場合のみ削除します
-# 例: "test-" と設定すれば "test-001", "test-user" などが削除対象になります
-TARGET_PREFIX = "test_" 
-
-# 必要であればリージョンを指定
 REGION_NAME = os.environ.get('AWS_DEFAULT_REGION', 'ap-northeast-1')
+
+# 条件1: Partition Key (PK) の設定
+PK_NAME = "UserId"          # パーティションキーのカラム名
+PK_VALUE = "user_001"       # 削除対象の値 (完全一致)
+
+# 条件2: Sort Key (SK) の設定
+SK_NAME = "Timestamp"       # ソートキーのカラム名
+SK_PREFIX = "2024-01"       # この文字で始まるものを削除 (前方一致)
 # ==========================================
 
-def truncate_dynamodb_table_filtered(table_name, region, prefix):
+def delete_specific_items(table_name, region):
     dynamodb = boto3.resource('dynamodb', region_name=region)
     table = dynamodb.Table(table_name)
     
-    # キー情報の取得
-    # KeyType='HASH' -> パーティションキー
-    # KeyType='RANGE' -> ソートキー
-    key_names = [key['AttributeName'] for key in table.key_schema]
-    sort_key_name = next((key['AttributeName'] for key in table.key_schema if key['KeyType'] == 'RANGE'), None)
-
-    # 削除に必要なキー情報のみを取得するための設定
-    projection_expression = ", ".join([f"#{k}" for k in key_names])
-    expression_attribute_names = {f"#{k}": k for k in key_names}
+    print(f"Target Table: {table_name}")
+    print(f"Condition: {PK_NAME} = '{PK_VALUE}' AND {SK_NAME} starts with '{SK_PREFIX}'")
     
-    print(f"Target Table: {table_name} ({region})")
-    
-    # フィルタ条件の作成
-    scan_kwargs = {
-        'ProjectionExpression': projection_expression,
-        'ExpressionAttributeNames': expression_attribute_names
-    }
-
-    if prefix and sort_key_name:
-        print(f"Filter Condition: SortKey '{sort_key_name}' begins with '{prefix}'")
-        # ここでフィルタ条件を追加
-        scan_kwargs['FilterExpression'] = Attr(sort_key_name).begins_with(prefix)
-    elif prefix and not sort_key_name:
-        print("Warning: Prefix was provided, but this table does not have a Sort Key. Aborting to be safe.")
-        return
-    else:
-        print("No prefix provided. Warning: This will delete ALL data.")
-        # 安全のため、prefix未指定時は確認を入れる等の対策をしても良いですが、今回はそのまま進めます
-    
-    print("Starting conditional deletion...")
-
+    # 削除用バッチライター
     with table.batch_writer() as batch:
+        # Queryのためのパラメータ
+        query_kwargs = {
+            # Keyオブジェクトを使うと直感的にAND条件が書けます
+            'KeyConditionExpression': Key(PK_NAME).eq(PK_VALUE) & Key(SK_NAME).begins_with(SK_PREFIX),
+            
+            # 削除に必要なのはキーだけなので、転送量を減らすためにキーのみ取得
+            # (ProjectionExpressionは必須ではありませんが推奨です)
+            'ProjectionExpression': f"#{PK_NAME}, #{SK_NAME}",
+            'ExpressionAttributeNames': {
+                f"#{PK_NAME}": PK_NAME,
+                f"#{SK_NAME}": SK_NAME
+            }
+        }
+        
         done = False
         start_key = None
         count = 0
         
         while not done:
             if start_key:
-                scan_kwargs['ExclusiveStartKey'] = start_key
+                query_kwargs['ExclusiveStartKey'] = start_key
             
-            response = table.scan(**scan_kwargs)
+            # scanではなくqueryを実行
+            response = table.query(**query_kwargs)
             items = response.get('Items', [])
             
             for item in items:
-                # 削除キーを構築
-                key_dict = {k: item[k] for k in key_names}
-                batch.delete_item(Key=key_dict)
+                # バッチ削除リストに追加
+                batch.delete_item(Key={
+                    PK_NAME: item[PK_NAME],
+                    SK_NAME: item[SK_NAME]
+                })
                 count += 1
             
             start_key = response.get('LastEvaluatedKey', None)
             done = start_key is None
-            print(f"\rScanned and queued {count} items...", end="")
+            print(f"\rQueried and queued {count} items...", end="")
             
-    print(f"\nCompleted. Deleted {count} items matching '{prefix}'.")
+    print(f"\nCompleted. Deleted {count} items.")
 
 if __name__ == "__main__":
-    truncate_dynamodb_table_filtered(TABLE_NAME, REGION_NAME, TARGET_PREFIX)
+    delete_specific_items(TABLE_NAME, REGION_NAME)
 ```
