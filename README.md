@@ -1,7 +1,14 @@
-kendra
-https://docs.aws.amazon.com/ja_jp/kendra/latest/dg/quotas.html
+```
+yarn add @mohtasham/md-to-docx
+```
 
+```
+import { convertMarkdownToDocx, downloadDocx } from "@mohtasham/md-to-docx";
 
-
-knowledgebase + bedrock
-https://docs.aws.amazon.com/ja_jp/bedrock/latest/userguide/knowledge-base-ds.html
+const handleDownload = async (markdownText: string) => {
+  // MarkdownをDocx(Blob)に変換
+  const blob = await convertMarkdownToDocx(markdownText);
+  // ブラウザでダウンロード実行
+  downloadDocx(blob, "ai-response.docx");
+};
+```
