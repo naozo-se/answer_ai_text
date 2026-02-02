@@ -1,8 +1,10 @@
-引用の改行がまとまってしまう問題は、Markdownパーサー（remark）が「連続する引用行」を一つの段落（Paragraph）として結合し、その中の改行コード（`\n`）を無視して処理していたことが原因です。
+画像で示していただいたような、引用の深さに応じて垂直線が増えていく「ネストされた引用」をWord上で再現するには、**Wordの「表（Table）」機能を引用の枠組みとして利用する**のが最も確実で美しい方法です。
 
-これを解決するために、**テキスト内の改行コードを明示的にWordの「改行（Break）」に変換するロジック**を組み込みました。あわせて、引用やリストのインデント計算をさらに精密に調整しています。
+Wordの標準的な段落境界線では、一つの段落に対して一本の左線しか引けませんが、表を入れ子（ネスト）にすることで、画像通りの多重線を表現できます。
 
-### 修正版：引用の改行と階層構造を維持する完全コード
+### 修正後のコード (React/TypeScript)
+
+引用（`blockquote`）の処理をテーブル形式に刷新し、その他の改善点もすべて盛り込んだ最終版です。
 
 ```tsx
 import React from 'react';
@@ -19,8 +21,8 @@ import remarkGfm from 'remark-gfm';
 export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => {
 
   /**
-   * インライン要素（テキスト、装飾、リンク）の解析
-   * テキスト内の改行コード（\n）をWordの改行に変換する処理を追加
+   * インライン要素の解析
+   * テキスト、装飾、リンク、および改行の処理
    */
   const processInlines = (nodes: any[], styles: { bold?: boolean; italics?: boolean; strike?: boolean; color?: string; underline?: any } = {}): any[] => {
     return nodes.flatMap(node => {
@@ -34,7 +36,7 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
 
       switch (node.type) {
         case 'text':
-          // 【核心の修正】テキスト内の \n を分割し、2行目以降に break: 1 を付与してTextRunを生成
+          // 改行コード \n を分割して Word の break に変換
           const lines = node.value.split('\n');
           return lines.map((line: string, i: number) => new TextRun({ 
             text: line, 
@@ -69,7 +71,7 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
             ...currentStyles
           })];
 
-        case 'break': // Markdownの明示的な改行（スペース2つ + 改行）
+        case 'break':
           return [new TextRun({ break: 1 })];
 
         default:
@@ -80,10 +82,11 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
 
   /**
    * ブロック要素の解析
+   * 引用 (blockquote) を表 (Table) で実装し、多重線を再現
    */
   const transformBlocks = (
     nodes: any[], 
-    context: { level: number; ordered: boolean; quoteDepth: number } = { level: 0, ordered: false, quoteDepth: 0 }
+    context: { level: number; ordered: boolean } = { level: 0, ordered: false }
   ): any[] => {
     const results: any[] = [];
 
@@ -100,27 +103,53 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
           results.push(new Paragraph({
             children: processInlines(node.children),
             heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6][node.depth - 1] || HeadingLevel.HEADING_1,
-            spacing: { before: 240, after: 120 },
-            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined
+            spacing: { before: 240, after: 120 }
           }));
           break;
 
         case 'paragraph':
           results.push(new Paragraph({
             children: processInlines(node.children),
-            spacing: { after: 120 },
-            // 引用(quoteDepth)がある場合は左線とインデントを適用
-            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined,
-            border: context.quoteDepth > 0 ? { 
-              left: { color: 'cccccc', space: 1, style: BorderStyle.SINGLE, size: 24 } 
-            } : undefined
+            spacing: { after: 120 }
           }));
           break;
 
-        case 'blockquote':
-          // 引用ノードの中身を再帰処理。quoteDepthを増やすことで2重引用(>>)に対応。
-          results.push(...transformBlocks(node.children, { ...context, quoteDepth: context.quoteDepth + 1 }));
+        case 'blockquote': {
+          // 引用の中身を再帰的に取得
+          const quoteContent = transformBlocks(node.children, context);
+          
+          // 表を使って垂直線（左境界線）を作成
+          results.push(new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            borders: {
+              top: { style: BorderStyle.NONE },
+              bottom: { style: BorderStyle.NONE },
+              left: { style: BorderStyle.SINGLE, size: 24, color: "C0C0C0" }, // 垂直線
+              right: { style: BorderStyle.NONE },
+              insideHorizontal: { style: BorderStyle.NONE },
+              insideVertical: { style: BorderStyle.NONE },
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: quoteContent as any,
+                    margins: { left: 240, top: 100, bottom: 100 },
+                    borders: {
+                      top: { style: BorderStyle.NONE },
+                      bottom: { style: BorderStyle.NONE },
+                      left: { style: BorderStyle.NONE },
+                      right: { style: BorderStyle.NONE },
+                    }
+                  })
+                ]
+              })
+            ],
+            // 前後の段落との間隔
+            spacing: { before: 100, after: 100 }
+          }));
           break;
+        }
 
         case 'list':
           results.push(...transformBlocks(node.children, { ...context, ordered: node.ordered }));
@@ -144,11 +173,7 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
             bullet: context.ordered ? undefined : { level: context.level },
             numbering: context.ordered ? { reference: 'main-numbering', level: context.level } : undefined,
             spacing: { after: 80 },
-            // リストが引用内にある場合のインデント調整
-            indent: { 
-              left: (context.quoteDepth * 720) + (context.level * 360) + 360, 
-              hanging: 360 
-            }
+            indent: { left: (context.level * 360) + 360, hanging: 360 }
           }));
 
           if (nestedListNodes.length > 0) {
@@ -204,26 +229,26 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
       saveAs(blob, 'final-report.docx');
     } catch (e) {
       console.error(e);
-      alert('エラーが発生しました');
+      alert('変換エラーが発生しました。コンソールを確認してください。');
     }
   };
 
-  return <button onClick={handleDownload}>DOCXをダウンロード</button>;
+  return <button onClick={handleDownload}>DOCXを保存</button>;
 };
 
 ```
 
 ---
 
-### 今回の修正ポイント解説
+### 実装のポイント解説
 
-* **引用内の改行維持**:
-`processInlines` 内の `case 'text'` を見てください。Markdownパーサーが一つにまとめてしまったテキストを `\n` で分割し、2行目以降の `TextRun` に `break: 1` を付与するようにしました。これにより、Word上でも一行ずつ改行されて表示されます。
-* **ネストした引用（2重引用）のスタイル**:
-`context.quoteDepth` に基づいて、左側の境界線とインデントを動的に計算するようにしています。画像にあったような「引用の中に引用がある」状態も、Wordのインデント機能で再現されます。
-* **インデント計算の精密化**:
-リスト項目（`listItem`）が引用内にある場合、引用の深さとリストのレベルを合算して余白を計算するように修正しました。これにより、文字が重なったり境界線を突き破ったりするのを防いでいます。
+* **多重の垂直線（Table Nesting）**:
+引用ノード（`blockquote`）に遭遇するたびに、左側にだけ灰色の境界線を持たせた `Table` を作成し、その中にコンテンツを配置します。引用がネストしている場合、表の中にさらに表が作られるため、Word上で画像のように複数の垂直線が綺麗に並びます。
+* **改行の完全保持**:
+テキストを `\n` で分割し、2行目以降に `break: 1` プロパティを付与した `TextRun` を生成します。これにより、引用内の複数行テキストが1行にまとまってしまう現象を回避しています。
+* **構造的なインデント**:
+表（Table）の `TableCell` にマージン（`margins: { left: 240 }`）を設定しているため、垂直線とテキストの間に適切な余白が生まれます。
 
-これで、リンク、取り消し線、地平線、そして「引用内の改行」まで全て網羅できました。
+Windows + VSCodeの環境で、AIが回答した複雑なMarkdownをそのままDOCX化するツールとして、かなり完成度が高まったのではないでしょうか。
 
-実際にこのコードで出力してみて、文字サイズやフォント（例えば「MS ゴシック」ではなく「游明朝」にしたい、など）の調整は必要ですか？それとも、これで運用できそうでしょうか？
+この変換ロジックをベースに、次は**ヘッダーやフッター、ページ番号の追加**なども検討されますか？あるいは、特定の**フォントファミリー（游明朝など）の指定**が必要であれば、すぐに対応可能です。
