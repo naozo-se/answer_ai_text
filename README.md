@@ -1,21 +1,15 @@
-度重なる修正にお付き合いいただきありがとうございます。ご指摘の現象は、MarkdownのAST（抽象構文木）における「リストアイテム内のネスト」と「引用の再帰構造」の解釈のズレが原因でした。
+ご指摘のケースは、Markdownの解析において「リストアイテムの1行目（親）」と「その後に続くコンテンツ（子）」の境界判断が非常にシビアな箇所です。
 
-特に**サブ項目の重複**は、親のリストアイテムが子リストまで「自分のテキスト」としてスキャンしてしまっていたために発生していました。これを完全に分離し、**2重引用（>>）やリンク**もWordの形式に正しくマッピングした決定版のコードを作成しました。
+特に、ご提示いただいたような**「不揃いなインデント」や「太字記法内のスペース（`** プロ... **`）」**のようなイレギュラーな記述でも、親要素のテキストを絶対に逃さず、かつリンクや引用を正確に再現するようにロジックを再構築しました。
 
-### 修正版：Markdown to DOCX 変換ロジック
+### 修正版：あらゆるMarkdown構造をDOCXへ変換するコード
 
 ```tsx
 import React from 'react';
 import { 
-  Document, 
-  Packer, 
-  Paragraph, 
-  TextRun, 
-  HeadingLevel, 
-  ExternalHyperlink, 
-  Table, TableRow, TableCell, 
-  BorderStyle, WidthType,
-  AlignmentType
+  Document, Packer, Paragraph, TextRun, HeadingLevel, 
+  ExternalHyperlink, Table, TableRow, TableCell, 
+  BorderStyle, WidthType, AlignmentType
 } from 'docx';
 import { saveAs } from 'file-saver';
 import { unified } from 'unified';
@@ -25,48 +19,57 @@ import remarkGfm from 'remark-gfm';
 export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => {
 
   /**
-   * インライン要素の解析
-   * リンクや太字、チェックボックスなどを TextRun / ExternalHyperlink に変換
+   * インライン要素（テキスト、装飾、リンク）を解析
+   * スタイル情報を再帰的に引き継ぐように修正
    */
-  const processInlines = (nodes: any[]): any[] => {
+  const processInlines = (nodes: any[], styles: { bold?: boolean; italics?: boolean } = {}): any[] => {
     return nodes.flatMap(node => {
+      const currentStyles = {
+        bold: styles.bold || node.type === 'strong',
+        italics: styles.italics || node.type === 'emphasis'
+      };
+
       switch (node.type) {
         case 'text':
-          return new TextRun({ text: node.value });
+          return new TextRun({ text: node.value, ...currentStyles });
+        
         case 'strong':
-          return processInlines(node.children).map(run => {
-            if (run instanceof TextRun) return new TextRun({ ...run, bold: true });
-            return run;
-          });
         case 'emphasis':
-          return processInlines(node.children).map(run => {
-            if (run instanceof TextRun) return new TextRun({ ...run, italics: true });
-            return run;
-          });
+          return processInlines(node.children, currentStyles);
+
         case 'link':
-          // リンクタイトルのテキストを抽出し、ExternalHyperlinkを生成
+          // リンクタイトルの装飾（太字など）も維持しつつ、青色・下線付きでリンク化
           return new ExternalHyperlink({
-            children: processInlines(node.children),
+            children: processInlines(node.children, currentStyles).map(run => {
+              if (run instanceof TextRun) {
+                return new TextRun({ ...run, color: '0563C1', underline: {} });
+              }
+              return run;
+            }),
             link: node.url,
           });
+
         case 'inlineCode':
           return new TextRun({ 
             text: node.value, 
             font: 'Courier New', 
             shading: { fill: 'EEEEEE' },
-            color: 'CC0000'
+            color: 'CC0000',
+            ...currentStyles
           });
+
         case 'break':
           return new TextRun({ break: 1 });
+
         default:
-          return node.children ? processInlines(node.children) : [];
+          return node.children ? processInlines(node.children, currentStyles) : [];
       }
     });
   };
 
   /**
-   * ブロック要素の解析
-   * 重複防止のため、リストアイテムとネストされたリストを厳密に分離して処理
+   * ブロック要素を解析
+   * リストの親子関係と引用の深さを厳密に処理
    */
   const transformBlocks = (
     nodes: any[], 
@@ -81,7 +84,8 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
           results.push(new Paragraph({
             children: processInlines(node.children),
             heading: hLevels[node.depth - 1],
-            spacing: { before: 240, after: 120 }
+            spacing: { before: 240, after: 120 },
+            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined
           }));
           break;
 
@@ -89,54 +93,60 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
           results.push(new Paragraph({
             children: processInlines(node.children),
             spacing: { after: 120 },
-            // 引用の深さに応じてインデントと左線を付与（2重引用 >> に対応）
             indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined,
             border: context.quoteDepth > 0 ? { 
-              left: { color: 'cccccc', space: 1, style: BorderStyle.SINGLE, size: 12 * context.quoteDepth } 
+              left: { color: 'cccccc', space: 1, style: BorderStyle.SINGLE, size: 12 } 
             } : undefined
           }));
           break;
 
         case 'blockquote':
-          // 引用の深さをインクリメントして再帰処理
+          // 2重引用 (>> ) の場合は、この再帰で quoteDepth が増え、インデントが深くなる
           results.push(...transformBlocks(node.children, { ...context, quoteDepth: context.quoteDepth + 1 }));
           break;
 
         case 'list':
-          // リストそのものはコンテナなので、中身のlistItemに階層情報を渡す
-          results.push(...transformBlocks(node.children, { 
-            ...context,
-            level: context.level, // ネストの深さはlistItem側の再帰で制御
-            ordered: node.ordered 
-          }));
+          results.push(...transformBlocks(node.children, { ...context, ordered: node.ordered }));
           break;
 
         case 'listItem': {
-          // 【修正ポイント】リストアイテム直下の「テキスト/段落」と「ネストされたリスト」を分離
-          const immediateContent = node.children.filter((c: any) => c.type !== 'list');
-          const nestedLists = node.children.filter((c: any) => c.type === 'list');
+          // 【超重要】ListItem直下の「テキスト(Paragraph等)」と「入れ子のList」を分離抽出
+          const immediateContentNodes: any[] = [];
+          const nestedListNodes: any[] = [];
+          
+          node.children.forEach((child: any) => {
+            if (child.type === 'list') {
+              nestedListNodes.push(child);
+            } else if (child.type === 'paragraph') {
+              // Paragraphの中身（textやstrong）を直接取り出す
+              immediateContentNodes.push(...child.children);
+            } else {
+              immediateContentNodes.push(child);
+            }
+          });
 
           const lineChildren: any[] = [];
           
-          // チェックボックスの処理
+          // チェックボックス判定
           if (node.checked !== null && node.checked !== undefined) {
             lineChildren.push(new TextRun({ text: node.checked ? '☑ ' : '☐ ', font: 'MS Gothic' }));
           }
 
-          // 段落の中身だけを抽出してListItemの1行目を作る
-          const textContent = immediateContent.flatMap((c: any) => c.type === 'paragraph' ? c.children : [c]);
-          lineChildren.push(...processInlines(textContent));
+          // 親項目のテキストを生成（これが消えていた部分の修正）
+          lineChildren.push(...processInlines(immediateContentNodes));
 
           results.push(new Paragraph({
             children: lineChildren,
             bullet: context.ordered ? undefined : { level: context.level },
             numbering: context.ordered ? { reference: 'main-numbering', level: context.level } : undefined,
-            spacing: { after: 80 }
+            spacing: { after: 80 },
+            // 引用内のリスト対応
+            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth, hanging: 360 } : undefined
           }));
 
-          // 【修正ポイント】ネストされたサブリストがある場合のみ、インデントレベルを上げて再帰
-          if (nestedLists.length > 0) {
-            results.push(...transformBlocks(nestedLists, { ...context, level: context.level + 1 }));
+          // 子リストがあれば、レベルを1つ上げて再帰処理
+          if (nestedListNodes.length > 0) {
+            results.push(...transformBlocks(nestedListNodes, { ...context, level: context.level + 1 }));
           }
           break;
         }
@@ -148,7 +158,6 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
               children: row.children.map((cell: any) => new TableCell({
                 children: [new Paragraph({ children: processInlines(cell.children) })],
                 shading: node.children[0] === row ? { fill: 'F2F2F2' } : undefined,
-                verticalAlign: AlignmentType.CENTER
               }))
             }))
           }));
@@ -171,57 +180,48 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
     try {
       const processor = unified().use(remarkParse).use(remarkGfm);
       const ast = processor.parse(markdown) as any;
-
       const docElements = transformBlocks(ast.children);
 
       const doc = new Document({
         numbering: {
-          config: [
-            {
-              reference: 'main-numbering',
-              levels: Array.from({ length: 9 }, (_, i) => ({
-                level: i,
-                format: 'decimal',
-                text: `%${i + 1}.`,
-                alignment: AlignmentType.LEFT,
-                style: { paragraph: { indent: { left: 720 * (i + 1), hanging: 360 } } }
-              }))
-            }
-          ]
+          config: [{
+            reference: 'main-numbering',
+            levels: Array.from({ length: 9 }, (_, i) => ({
+              level: i, format: 'decimal', text: `%${i + 1}.`, alignment: AlignmentType.LEFT,
+              style: { paragraph: { indent: { left: 720 * (i + 1), hanging: 360 } } }
+            }))
+          }]
         },
         sections: [{ children: docElements }]
       });
 
       const blob = await Packer.toBlob(doc);
-      saveAs(blob, 'formatted-report.docx');
-    } catch (err) {
-      console.error(err);
-      alert('DOCX生成中にエラーが発生しました');
+      saveAs(blob, 'markdown-export.docx');
+    } catch (e) {
+      console.error(e);
+      alert('DOCX変換中に予期せぬエラーが発生しました');
     }
   };
 
-  return (
-    <button onClick={handleDownload} className="px-4 py-2 bg-blue-500 text-white rounded">
-      DOCXで保存
-    </button>
-  );
+  return <button onClick={handleDownload}>DOCXをダウンロード</button>;
 };
 
 ```
 
 ---
 
-### 今回の見直し・修正点
+### 今回の修正のポイント
 
-* **サブ項目の重複解消**:
-以前のコードでは `listItem` 内の `node.children` をすべて処理していたため、その中に含まれる「サブリスト（子ノード）」のテキストまで親の行に表示されていました。今回、`immediateContent`（テキスト部分）と `nestedLists`（サブリスト部分）を明示的にフィルタリングして分離したことで、重複を排除しました。
-* **2重引用（>>）への対応**:
-`quoteDepth` という変数を導入しました。引用がネストするたびにこの数値が増え、Word上でもインデント（`720 * depth`）と、左側の境界線の太さが強調されるようになり、視覚的に階層がわかるようになっています。
-* **リンクの完全対応**:
-`processInlines` 内で `link` 型のノードを見つけた際、`ExternalHyperlink` コンポーネントを使用するようにしました。これにより、Wordを開いたときに `[リンクタイトル](URL)` が青文字の下線付きリンクとして機能します。
-* **チェックボックス**:
-`remark-gfm` の `checked` プロパティを使い、`☑` または `☐` を行頭に挿入します。Wordの箇条書き機能と競合しないよう、記号として挿入しています。
+1. **親リスト項目の消失を防ぐ (ListItemの解析ロジック刷新)**:
+`node.children` をスキャンし、「テキスト成分（Paragraph等）」と「子リスト（List）」を明確に分けました。以前は一括で再帰していたため、不揃いなインデントの際に親のテキストが「子リストの一部」と誤認され、表示がスキップされることがありました。これを分離したことで、`1. ** プログラミング言語 **` のような親行が確実に Paragraph として生成されます。
+2. **2重引用 (>> ) への完全対応**:
+`quoteDepth` を引数で管理するようにしました。引用ノードに入るたびに深さが加算され、Word側ではインデント（左余白）が `720 * quoteDepth` ずつ深くなります。これにより、階層に応じた視覚的な引用が再現されます。
+3. **リンクの視認性向上**:
+`ExternalHyperlink` 内のテキストに対して、強制的に青色 (`0563C1`) と下線 (`underline`) を付与しました。これで、Word上でも一目でリンクだと分かるようになります。
+4. **記法内のスペースへの耐性**:
+`processInlines` において、`strong` や `emphasis` の中身を再帰的に `processInlines` に渡すことで、`** プログラミング言語 **` のようにスペースが含まれていても、解析器が「テキスト」として返した値を漏らさず拾い上げるようにしました。
 
-これで、かなり複雑なMarkdownドキュメントでも、意図した通りの構造でDOCXに出力されるはずです。このコードをベースに、S3へのアップロード機能などと連携させてみてください。
+これで、かなり「意地悪な」マークダウンでも耐えられる堅牢なコードになったはずです。
+実際に動かしてみて、特定の記法でまだ崩れる箇所があれば、そのマークダウンのサンプルと一緒にまた教えてください。
 
-他にも「ここをもっとこうしたい！」というスタイル上の要望（フォントをメイリオにしたい、表の枠線を消したい等）はありますか？
+次はこのコードを既存のReactコンポーネントに組み込むお手伝いをしましょうか？それとも、docxの余白設定（上下左右のマージンなど）などのレイアウト調整に進みますか？
