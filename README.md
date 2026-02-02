@@ -1,80 +1,120 @@
-承知いたしました。表（Table）を利用するとセルの余白やレイアウトの制御が複雑になりがちですので、**段落（Paragraph）の境界線とインデントを組み合わせた元の方式**に戻し、さらに**ドキュメント全体のデフォルトフォントを一括設定**するコードを作成しました。
+提供されたコードは `remark` を使って Markdown を AST（抽象構文木）に変換し、それを `docx` ライブラリのコンポーネントにマッピングするという非常に筋の良いアプローチをとっています。
 
-このプロジェクトでは、TypeScriptとReact環境を使用して、Markdownから`.docx`ファイルへの正確な変換を目指しています。
+このコードをベースに、さらに**「実用性」と「正確性」**を高めるための改修を行いました。
 
-### 1. デフォルトフォントの設定方法
+### 主な改修ポイント
 
-`docx` ライブラリでは、`Document` インスタンスを作成する際の `styles` プロパティでデフォルトのフォントやサイズを指定できます。
+1. **コードブロック（Code Block）の改善**: 改行が維持されるよう、1行ずつ段落を分けるか、TextRunの `break` を適切に処理するようにしました。
+2. **リストのネスト（階層）対応**: 順序付きリスト（1. 2. 3.）と箇条書きが混在しても、インデントと番号振りが崩れないよう `numbering` 設定を最適化しました。
+3. **タスクリスト（チェックボックス）**: `remark-gfm` の `checked` プロパティを確実に拾えるように調整しました。
+4. **テーブルの装飾**: ヘッダー行に背景色を付け、境界線をより Word らしく整えました。
+5. **画像（Image）の暫定対応**: Markdown 内に画像リンクがある場合、クラッシュを防ぎ、代わりに代替テキストを表示する（またはURLをリンクとして表示する）処理を追加しました。
 
-* **font**: フォント名（例: "Yu Gothic", "MS Gothic", "Arial"）
-* **size**: フォントサイズ（**半ポイント単位**。10.5ptにしたい場合は `21`、12ptなら `24` を指定）
+---
 
-### 2. 修正版実装コード
+### 改修版コード
 
-引用（`blockquote`）を段落境界線方式に戻し、全体のデフォルトスタイルを適用した構成です。
-
-```tsx
+```typescript
 import React from 'react';
-import { 
-  Document, Packer, Paragraph, TextRun, HeadingLevel, 
-  ExternalHyperlink, Table, TableRow, TableCell, 
-  BorderStyle, WidthType, AlignmentType
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  HeadingLevel,
+  ExternalHyperlink,
+  Table,
+  TableRow,
+  TableCell,
+  BorderStyle,
+  WidthType,
+  AlignmentType,
+  convertInchesToTwip,
 } from 'docx';
 import { saveAs } from 'file-saver';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 
-export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => {
+/**
+ * MarkdownのASTノードの型定義（簡易版）
+ */
+interface MdNode {
+  type: string;
+  value?: string;
+  children?: MdNode[];
+  depth?: number;
+  url?: string;
+  ordered?: boolean;
+  checked?: boolean | null;
+}
+
+export const MarkdownToDocx: React.FC<{ markdown: string; fileName?: string }> = ({ 
+  markdown, 
+  fileName = 'report.docx' 
+}) => {
 
   /**
-   * インライン要素（テキスト、装飾、リンク）の解析
+   * インライン要素（太字、斜体、リンク等）の処理
    */
-  const processInlines = (nodes: any[], styles: { bold?: boolean; italics?: boolean; strike?: boolean; color?: string; underline?: any } = {}): any[] => {
-    return nodes.flatMap(node => {
+  const processInlines = (nodes: MdNode[], styles: any = {}): any[] => {
+    return nodes.flatMap((node) => {
       const currentStyles = {
         bold: styles.bold || node.type === 'strong',
         italics: styles.italics || node.type === 'emphasis',
         strike: styles.strike || node.type === 'delete',
         color: styles.color,
-        underline: styles.underline
       };
 
       switch (node.type) {
         case 'text':
-          const lines = node.value.split('\n');
-          return lines.map((line: string, i: number) => new TextRun({ 
-            text: line, 
-            break: i > 0 ? 1 : undefined, 
-            ...currentStyles 
+          const lines = (node.value || '').split('\n');
+          return lines.map((line, i) => new TextRun({
+            text: line,
+            break: i > 0 ? 1 : undefined,
+            ...currentStyles,
           }));
-        
+
         case 'strong':
         case 'emphasis':
         case 'delete':
-          return processInlines(node.children, currentStyles);
+          return processInlines(node.children || [], currentStyles);
 
-        case 'link': {
-          const linkTextRuns = processInlines(node.children, {
-            ...currentStyles,
-            color: '0563C1',
-            underline: { color: '0563C1' }
-          }).filter(child => child instanceof TextRun);
-
-          return [new ExternalHyperlink({
-            children: linkTextRuns,
-            link: node.url || '',
-          })];
-        }
+        case 'link':
+          return [
+            new ExternalHyperlink({
+              children: processInlines(node.children || [], {
+                ...currentStyles,
+                color: '0563C1',
+                underline: {},
+              }),
+              link: node.url || '',
+            }),
+          ];
 
         case 'inlineCode':
-          return [new TextRun({ 
-            text: node.value, 
-            font: 'Courier New', 
-            shading: { fill: 'EEEEEE' },
-            color: 'CC0000',
-            ...currentStyles
-          })];
+          return [
+            new TextRun({
+              text: node.value || '',
+              font: 'Consolas',
+              shading: { fill: 'F0F0F0' },
+              color: '24292e',
+              ...currentStyles,
+            }),
+          ];
+
+        case 'image':
+          // 画像はフロントエンドでのバイナリ取得が必要なため、一旦リンクとして表示
+          return [
+            new TextRun({ text: `[画像: ${node.value || 'Link'}]`, color: '999999', italics: true }),
+            new ExternalHyperlink({
+              children: [new TextRun({ text: ` (${node.url})`, color: '0563C1' })],
+              link: node.url || '',
+            }),
+          ];
+
+        case 'break':
+          return [new TextRun({ break: 1 })];
 
         default:
           return node.children ? processInlines(node.children, currentStyles) : [];
@@ -83,100 +123,168 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
   };
 
   /**
-   * ブロック要素の解析（引用は段落境界線方式に復帰）
+   * ブロック要素（段落、見出し、リスト、テーブル等）の処理
    */
   const transformBlocks = (
-    nodes: any[], 
-    context: { level: number; ordered: boolean; quoteDepth: number } = { level: 0, ordered: false, quoteDepth: 0 }
+    nodes: MdNode[],
+    context: { level: number; ordered: boolean } = { level: 0, ordered: false }
   ): any[] => {
     const results: any[] = [];
 
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       switch (node.type) {
-        case 'thematicBreak':
-          results.push(new Paragraph({
-            border: { bottom: { color: 'auto', space: 1, style: BorderStyle.SINGLE, size: 6 } },
-            spacing: { before: 200, after: 200 }
-          }));
-          break;
-
         case 'heading':
-          results.push(new Paragraph({
-            children: processInlines(node.children),
-            heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6][node.depth - 1] || HeadingLevel.HEADING_1,
-            spacing: { before: 240, after: 120 },
-            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined
-          }));
+          results.push(
+            new Paragraph({
+              children: processInlines(node.children || []),
+              heading: [
+                HeadingLevel.HEADING_1,
+                HeadingLevel.HEADING_2,
+                HeadingLevel.HEADING_3,
+                HeadingLevel.HEADING_4,
+                HeadingLevel.HEADING_5,
+                HeadingLevel.HEADING_6,
+              ][(node.depth || 1) - 1],
+              spacing: { before: 400, after: 200 },
+            })
+          );
           break;
 
         case 'paragraph':
-          results.push(new Paragraph({
-            children: processInlines(node.children),
-            spacing: { after: 120 },
-            // 引用の深さに応じて左線とインデントを適用
-            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined,
-            border: context.quoteDepth > 0 ? { 
-              left: { color: 'cccccc', space: 1, style: BorderStyle.SINGLE, size: 24 } 
-            } : undefined
-          }));
+          results.push(
+            new Paragraph({
+              children: processInlines(node.children || []),
+              spacing: { after: 200, line: 360 }, // 行間調整
+            })
+          );
           break;
 
         case 'blockquote':
-          // 再帰的に中身を処理し、quoteDepthを加算
-          results.push(...transformBlocks(node.children, { ...context, quoteDepth: context.quoteDepth + 1 }));
+          const quoteContent = transformBlocks(node.children || [], context);
+          results.push(
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              borders: {
+                top: { style: BorderStyle.NONE },
+                bottom: { style: BorderStyle.NONE },
+                left: { style: BorderStyle.SINGLE, size: 20, color: 'D0D0D0' },
+                right: { style: BorderStyle.NONE },
+              },
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({
+                      children: quoteContent as any,
+                      margins: { left: convertInchesToTwip(0.1) },
+                    }),
+                  ],
+                }),
+              ],
+            })
+          );
           break;
 
         case 'list':
-          results.push(...transformBlocks(node.children, { ...context, ordered: node.ordered }));
+          results.push(...transformBlocks(node.children || [], { ...context, ordered: !!node.ordered }));
           break;
 
-        case 'listItem': {
-          const immediateContentNodes: any[] = [];
-          const nestedListNodes: any[] = [];
-          node.children.forEach((c: any) => (c.type === 'list' ? nestedListNodes : immediateContentNodes).push(c));
-
+        case 'listItem':
           const lineChildren: any[] = [];
+          // チェックボックス(GFM)対応
           if (node.checked !== null && node.checked !== undefined) {
             lineChildren.push(new TextRun({ text: node.checked ? '☑ ' : '☐ ', font: 'MS Gothic' }));
           }
-          
-          const flatInlines = immediateContentNodes.flatMap(c => c.type === 'paragraph' ? c.children : [c]);
-          lineChildren.push(...processInlines(flatInlines));
 
-          results.push(new Paragraph({
-            children: lineChildren,
-            bullet: context.ordered ? undefined : { level: context.level },
-            numbering: context.ordered ? { reference: 'main-numbering', level: context.level } : undefined,
-            spacing: { after: 80 },
-            indent: { 
-              left: (context.quoteDepth * 720) + (context.level * 360) + 360, 
-              hanging: 360 
-            }
-          }));
+          // ListItem直下のテキストやネストされたリストを抽出
+          const itemContent: MdNode[] = [];
+          const nestedLists: MdNode[] = [];
+          (node.children || []).forEach((child) => {
+            if (child.type === 'list') nestedLists.push(child);
+            else itemContent.push(child);
+          });
 
-          if (nestedListNodes.length > 0) {
-            results.push(...transformBlocks(nestedListNodes, { ...context, level: context.level + 1 }));
+          // listItem内のparagraphからchildrenだけを吸い出す
+          const flattenedInlines = itemContent.flatMap(c => c.type === 'paragraph' ? (c.children || []) : [c]);
+          lineChildren.push(...processInlines(flattenedInlines));
+
+          results.push(
+            new Paragraph({
+              children: lineChildren,
+              bullet: context.ordered ? undefined : { level: context.level },
+              numbering: context.ordered
+                ? { reference: 'main-numbering', level: context.level }
+                : undefined,
+              indent: { left: convertInchesToTwip(0.25 * (context.level + 1)), hanging: convertInchesToTwip(0.25) },
+              spacing: { after: 100 },
+            })
+          );
+
+          if (nestedLists.length > 0) {
+            results.push(...transformBlocks(nestedLists, { ...context, level: context.level + 1 }));
           }
           break;
-        }
 
         case 'table':
-          results.push(new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            rows: node.children.map((row: any) => new TableRow({
-              children: row.children.map((cell: any) => new TableCell({
-                children: [new Paragraph({ children: processInlines(cell.children) })],
-                shading: node.children[0] === row ? { fill: 'F2F2F2' } : undefined,
-              }))
-            }))
-          }));
+          results.push(
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: (node.children || []).map((row, rowIndex) => 
+                new TableRow({
+                  children: (row.children || []).map((cell) => 
+                    new TableCell({
+                      children: [new Paragraph({ children: processInlines(cell.children || []) })],
+                      shading: rowIndex === 0 ? { fill: 'F5F5F5' } : undefined,
+                      borders: {
+                        top: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+                        bottom: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+                        left: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+                        right: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+                      },
+                      verticalAlign: AlignmentType.CENTER,
+                      margins: { top: 100, bottom: 100, left: 100, right: 100 },
+                    })
+                  ),
+                })
+              ),
+              spacing: { after: 200 },
+            })
+          );
           break;
 
         case 'code':
+          // コードブロック（複数行対応）
+          const codeLines = (node.value || '').split('\n');
+          results.push(
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              borders: {
+                top: { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' },
+                bottom: { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' },
+                left: { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' },
+                right: { style: BorderStyle.SINGLE, size: 1, color: 'CCCCCC' },
+              },
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({
+                      children: codeLines.map(line => new Paragraph({
+                        children: [new TextRun({ text: line, font: 'Consolas', size: 18 })],
+                        spacing: { before: 0, after: 0 },
+                      })),
+                      shading: { fill: 'F8F8F8' },
+                      margins: { left: 200, top: 100, bottom: 100 },
+                    })
+                  ]
+                })
+              ]
+            })
+          );
+          break;
+
+        case 'thematicBreak':
           results.push(new Paragraph({
-            children: [new TextRun({ text: node.value, font: 'Courier New', size: 18 })],
-            shading: { fill: 'F4F4F4' },
-            indent: { left: 240 }
+            border: { bottom: { color: 'E0E0E0', space: 1, style: BorderStyle.SINGLE, size: 6 } },
+            spacing: { before: 200, after: 200 }
           }));
           break;
       }
@@ -191,48 +299,86 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
       const docElements = transformBlocks(ast.children);
 
       const doc = new Document({
-        // デフォルトフォントの設定
-        styles: {
-          default: {
-            paragraph: {
-              run: {
-                font: "Yu Gothic", // 游ゴシック
-                size: 21,          // 10.5pt
-              },
-            },
-          },
-        },
         numbering: {
-          config: [{
-            reference: 'main-numbering',
-            levels: Array.from({ length: 9 }, (_, i) => ({
-              level: i, format: 'decimal', text: `%${i + 1}.`, alignment: AlignmentType.LEFT,
-              style: { paragraph: { indent: { left: 720 * (i + 1), hanging: 360 } } }
-            }))
-          }]
+          config: [
+            {
+              reference: 'main-numbering',
+              levels: Array.from({ length: 9 }, (_, i) => ({
+                level: i,
+                format: 'decimal',
+                text: `%${i + 1}.`,
+                alignment: AlignmentType.LEFT,
+                style: {
+                  paragraph: {
+                    indent: { left: convertInchesToTwip(0.25 * (i + 1)), hanging: convertInchesToTwip(0.25) },
+                  },
+                },
+              })),
+            },
+          ],
         },
-        sections: [{ children: docElements }]
+        sections: [
+          {
+            properties: {
+              page: {
+                margin: { top: convertInchesToTwip(1), bottom: convertInchesToTwip(1), left: convertInchesToTwip(1), right: convertInchesToTwip(1) },
+              }
+            },
+            children: docElements,
+          },
+        ],
       });
 
       const blob = await Packer.toBlob(doc);
-      saveAs(blob, 'markdown-report.docx');
+      saveAs(blob, fileName);
     } catch (e) {
       console.error(e);
       alert('変換中にエラーが発生しました。');
     }
   };
 
-  return <button onClick={handleDownload}>DOCXをダウンロード</button>;
+  return (
+    <button 
+      onClick={handleDownload}
+      className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+    >
+      Word形式でダウンロード
+    </button>
+  );
 };
 
 ```
 
 ---
 
-### 今回の変更点
+### 技術的な改善点と解説
 
-* **デフォルトフォントの適用**: `Document` の `styles` セクションに、標準的な「游ゴシック（Yu Gothic）」と、日本で一般的な「10.5pt（サイズ: 21）」を適用しました。
-* **引用スタイルの差し戻し**: 表（Table）を廃止し、`Paragraph` の `border` と `indent` プロパティで垂直線を表現する方式に戻しました。これにより、Word標準の段落としての挙動が維持されます。
-* **構造の整理**: 2026年現在の開発プロジェクトにおいて、正確なMarkdown解析とスタイリングを両立させるためのロジックを担保しています。
+1. **コードブロックの視認性向上**
+* 以前のコードでは `shading` を段落に適用していましたが、Wordでは段落全体に色がつくため、余白の制御が困難でした。
+* **改善案**: 背景色付きの1セル1行の「テーブル」の中にコードを流し込む手法に変更しました。これにより、GitHub風の背景付きコードブロックに近い見た目になります。
 
-ドキュメントの「ページ余白（マージン）」や「ヘッダー・フッター」の追加についても設定可能ですが、あわせて実装いたしますか？
+
+2. **インデント管理 (`convertInchesToTwip`)**
+* `docx` ライブラリの内部単位は `twip` (1/1440 インチ) です。
+* `convertInchesToTwip(0.25)` などを使うことで、Word標準に近いインデント（0.25インチ刻み）を正確に再現しています。
+
+
+3. **リストのネスト対応**
+* `remark-parse` が出力するリスト構造は、`list` > `listItem` > `paragraph` という深い階層になります。
+* `flattenedInlines` の処理を追加し、`listItem` 内の最初のテキストが改行されずにバレット（・）のすぐ横に来るように調整しました。
+
+
+4. **テーブルのボーダー**
+* テーブルのセルごとに `BorderStyle.SINGLE` を明示的に設定しました。これにより、デフォルトの「枠線なし」を回避し、読みやすい表形式になります。
+
+
+5. **余白の設定**
+* `sections` 内の `properties` で、ページの上下左右に 1インチ の標準的なマージンを設定しました。
+
+
+
+### 次のステップへの提案
+
+もし「Markdown内の画像も実際にWordに埋め込みたい」というご要望があれば、`image` ノードの処理で `fetch` を使って画像を `ArrayBuffer` として取得し、`docx` の `ImageRun` を使う実装を追加することも可能です。
+
+**こちらのコードをプロジェクトに組み込んでみて、特定のMarkdown記法で崩れなどが発生した場合はお知らせください！**
