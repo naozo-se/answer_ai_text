@@ -1,4 +1,22 @@
+HTML変換を介さず、Markdownの抽象構文木（AST）を直接解析して `docx` のオブジェクトモデルに変換するアプローチで実装します。
 
+この方法には、Markdownパーサーとして非常に強力な **`remark`** エコシステムを使用します。これにより、HTMLを経由せずに正確な構造解析が可能です。
+
+### 1. パッケージのインストール
+
+まず、必要なライブラリをインストールしてください。
+
+```bash
+yarn add docx file-saver remark-parse unified
+yarn add -D @types/file-saver
+
+```
+
+### 2. 実装コード (React/TypeScript)
+
+このコードは、Markdown文字列を `unified` / `remark-parse` で解析し、各ノード（見出し、リスト、強調など）を `docx` のコンポーネントに再帰的に変換します。
+
+```tsx
 import React from 'react';
 import { 
   Document, 
@@ -161,3 +179,20 @@ export const DocxDownloadButton: React.FC<{ markdownContent: string }> = ({ mark
 };
 
 export default DocxDownloadButton;
+
+```
+
+---
+
+### この実装のポイント
+
+* **HTML完全不使用:** `remark-parse` を使って Markdown 文字列を直接 JavaScript オブジェクト（AST）に分解しています。そのため、ブラウザの DOM や `dangerouslySetInnerHTML` などに依存せず、セキュアかつ正確に構造を把握できます。
+* **再帰的処理:** Markdown の「ネストされたリスト」や「引用の中にリスト」といった複雑な構造も、`transformNode` 関数が再帰的に処理することで `docx` の構造にマッピングしています。
+* **インラインスタイルの維持:** `strong`（太字）、`emphasis`（斜体）、`inlineCode`（等幅フォント）、`link`（ハイパーリンク）を `TextRun` として適切に処理しています。
+* **docx v8/v9 対応:** `docx` ライブラリの最新の書き方（`Document` の `sections` プロパティなど）に準拠しています。
+
+### 注意点
+
+Markdown の表（Table）に関しては、`remark-parse` 標準ではサポートされておらず、別途 `remark-gfm` などのプラグインと、それに対応する `docx` の `Table` オブジェクトへの変換ロジックを追加する必要があります。もし表の対応も必須であれば、追加で実装可能です。
+
+このコードで、AIからの回答（マークダウン）を安全かつ綺麗にWordファイルへ変換できるはずです。他に調整したいスタイル（フォントサイズや余白など）があれば教えてくださいね。
