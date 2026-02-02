@@ -1,10 +1,17 @@
-画像で示していただいたような、引用の深さに応じて垂直線が増えていく「ネストされた引用」をWord上で再現するには、**Wordの「表（Table）」機能を引用の枠組みとして利用する**のが最も確実で美しい方法です。
+承知いたしました。表（Table）を利用するとセルの余白やレイアウトの制御が複雑になりがちですので、**段落（Paragraph）の境界線とインデントを組み合わせた元の方式**に戻し、さらに**ドキュメント全体のデフォルトフォントを一括設定**するコードを作成しました。
 
-Wordの標準的な段落境界線では、一つの段落に対して一本の左線しか引けませんが、表を入れ子（ネスト）にすることで、画像通りの多重線を表現できます。
+このプロジェクトでは、TypeScriptとReact環境を使用して、Markdownから`.docx`ファイルへの正確な変換を目指しています。
 
-### 修正後のコード (React/TypeScript)
+### 1. デフォルトフォントの設定方法
 
-引用（`blockquote`）の処理をテーブル形式に刷新し、その他の改善点もすべて盛り込んだ最終版です。
+`docx` ライブラリでは、`Document` インスタンスを作成する際の `styles` プロパティでデフォルトのフォントやサイズを指定できます。
+
+* **font**: フォント名（例: "Yu Gothic", "MS Gothic", "Arial"）
+* **size**: フォントサイズ（**半ポイント単位**。10.5ptにしたい場合は `21`、12ptなら `24` を指定）
+
+### 2. 修正版実装コード
+
+引用（`blockquote`）を段落境界線方式に戻し、全体のデフォルトスタイルを適用した構成です。
 
 ```tsx
 import React from 'react';
@@ -21,8 +28,7 @@ import remarkGfm from 'remark-gfm';
 export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => {
 
   /**
-   * インライン要素の解析
-   * テキスト、装飾、リンク、および改行の処理
+   * インライン要素（テキスト、装飾、リンク）の解析
    */
   const processInlines = (nodes: any[], styles: { bold?: boolean; italics?: boolean; strike?: boolean; color?: string; underline?: any } = {}): any[] => {
     return nodes.flatMap(node => {
@@ -36,7 +42,6 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
 
       switch (node.type) {
         case 'text':
-          // 改行コード \n を分割して Word の break に変換
           const lines = node.value.split('\n');
           return lines.map((line: string, i: number) => new TextRun({ 
             text: line, 
@@ -71,9 +76,6 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
             ...currentStyles
           })];
 
-        case 'break':
-          return [new TextRun({ break: 1 })];
-
         default:
           return node.children ? processInlines(node.children, currentStyles) : [];
       }
@@ -81,12 +83,11 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
   };
 
   /**
-   * ブロック要素の解析
-   * 引用 (blockquote) を表 (Table) で実装し、多重線を再現
+   * ブロック要素の解析（引用は段落境界線方式に復帰）
    */
   const transformBlocks = (
     nodes: any[], 
-    context: { level: number; ordered: boolean } = { level: 0, ordered: false }
+    context: { level: number; ordered: boolean; quoteDepth: number } = { level: 0, ordered: false, quoteDepth: 0 }
   ): any[] => {
     const results: any[] = [];
 
@@ -103,53 +104,27 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
           results.push(new Paragraph({
             children: processInlines(node.children),
             heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6][node.depth - 1] || HeadingLevel.HEADING_1,
-            spacing: { before: 240, after: 120 }
+            spacing: { before: 240, after: 120 },
+            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined
           }));
           break;
 
         case 'paragraph':
           results.push(new Paragraph({
             children: processInlines(node.children),
-            spacing: { after: 120 }
+            spacing: { after: 120 },
+            // 引用の深さに応じて左線とインデントを適用
+            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined,
+            border: context.quoteDepth > 0 ? { 
+              left: { color: 'cccccc', space: 1, style: BorderStyle.SINGLE, size: 24 } 
+            } : undefined
           }));
           break;
 
-        case 'blockquote': {
-          // 引用の中身を再帰的に取得
-          const quoteContent = transformBlocks(node.children, context);
-          
-          // 表を使って垂直線（左境界線）を作成
-          results.push(new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            borders: {
-              top: { style: BorderStyle.NONE },
-              bottom: { style: BorderStyle.NONE },
-              left: { style: BorderStyle.SINGLE, size: 24, color: "C0C0C0" }, // 垂直線
-              right: { style: BorderStyle.NONE },
-              insideHorizontal: { style: BorderStyle.NONE },
-              insideVertical: { style: BorderStyle.NONE },
-            },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({
-                    children: quoteContent as any,
-                    margins: { left: 240, top: 100, bottom: 100 },
-                    borders: {
-                      top: { style: BorderStyle.NONE },
-                      bottom: { style: BorderStyle.NONE },
-                      left: { style: BorderStyle.NONE },
-                      right: { style: BorderStyle.NONE },
-                    }
-                  })
-                ]
-              })
-            ],
-            // 前後の段落との間隔
-            spacing: { before: 100, after: 100 }
-          }));
+        case 'blockquote':
+          // 再帰的に中身を処理し、quoteDepthを加算
+          results.push(...transformBlocks(node.children, { ...context, quoteDepth: context.quoteDepth + 1 }));
           break;
-        }
 
         case 'list':
           results.push(...transformBlocks(node.children, { ...context, ordered: node.ordered }));
@@ -173,7 +148,10 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
             bullet: context.ordered ? undefined : { level: context.level },
             numbering: context.ordered ? { reference: 'main-numbering', level: context.level } : undefined,
             spacing: { after: 80 },
-            indent: { left: (context.level * 360) + 360, hanging: 360 }
+            indent: { 
+              left: (context.quoteDepth * 720) + (context.level * 360) + 360, 
+              hanging: 360 
+            }
           }));
 
           if (nestedListNodes.length > 0) {
@@ -213,6 +191,17 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
       const docElements = transformBlocks(ast.children);
 
       const doc = new Document({
+        // デフォルトフォントの設定
+        styles: {
+          default: {
+            paragraph: {
+              run: {
+                font: "Yu Gothic", // 游ゴシック
+                size: 21,          // 10.5pt
+              },
+            },
+          },
+        },
         numbering: {
           config: [{
             reference: 'main-numbering',
@@ -226,29 +215,24 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
       });
 
       const blob = await Packer.toBlob(doc);
-      saveAs(blob, 'final-report.docx');
+      saveAs(blob, 'markdown-report.docx');
     } catch (e) {
       console.error(e);
-      alert('変換エラーが発生しました。コンソールを確認してください。');
+      alert('変換中にエラーが発生しました。');
     }
   };
 
-  return <button onClick={handleDownload}>DOCXを保存</button>;
+  return <button onClick={handleDownload}>DOCXをダウンロード</button>;
 };
 
 ```
 
 ---
 
-### 実装のポイント解説
+### 今回の変更点
 
-* **多重の垂直線（Table Nesting）**:
-引用ノード（`blockquote`）に遭遇するたびに、左側にだけ灰色の境界線を持たせた `Table` を作成し、その中にコンテンツを配置します。引用がネストしている場合、表の中にさらに表が作られるため、Word上で画像のように複数の垂直線が綺麗に並びます。
-* **改行の完全保持**:
-テキストを `\n` で分割し、2行目以降に `break: 1` プロパティを付与した `TextRun` を生成します。これにより、引用内の複数行テキストが1行にまとまってしまう現象を回避しています。
-* **構造的なインデント**:
-表（Table）の `TableCell` にマージン（`margins: { left: 240 }`）を設定しているため、垂直線とテキストの間に適切な余白が生まれます。
+* **デフォルトフォントの適用**: `Document` の `styles` セクションに、標準的な「游ゴシック（Yu Gothic）」と、日本で一般的な「10.5pt（サイズ: 21）」を適用しました。
+* **引用スタイルの差し戻し**: 表（Table）を廃止し、`Paragraph` の `border` と `indent` プロパティで垂直線を表現する方式に戻しました。これにより、Word標準の段落としての挙動が維持されます。
+* **構造の整理**: 2026年現在の開発プロジェクトにおいて、正確なMarkdown解析とスタイリングを両立させるためのロジックを担保しています。
 
-Windows + VSCodeの環境で、AIが回答した複雑なMarkdownをそのままDOCX化するツールとして、かなり完成度が高まったのではないでしょうか。
-
-この変換ロジックをベースに、次は**ヘッダーやフッター、ページ番号の追加**なども検討されますか？あるいは、特定の**フォントファミリー（游明朝など）の指定**が必要であれば、すぐに対応可能です。
+ドキュメントの「ページ余白（マージン）」や「ヘッダー・フッター」の追加についても設定可能ですが、あわせて実装いたしますか？
