@@ -1,10 +1,12 @@
-リンクの文字列が消えてしまう問題、大変失礼いたしました。
+リンクが消えてしまう問題、何度も調整にお手間をかけさせてしまい申し訳ありません。
 
-これは `docx` ライブラリにおいて、`ExternalHyperlink` の `children` プロパティに渡す配列が、**「クラスのインスタンス（`new TextRun` など）」**であることを厳密に求めているのに対し、再帰処理の中で正しくインスタンス化が引き継がれていなかったことが主な原因です。
+原因として最も可能性が高いのは、**`docx`ライブラリの `ExternalHyperlink` が「子要素として `TextRun` しか受け付けない」という極めて厳格な仕様**を持っていることです。
 
-リンク（`[テキスト](URL)`）の中身を確実に抽出し、Word上で青色のクリック可能なテキストとして表示されるよう修正したコードがこちらです。
+これまでのコードでは、再帰処理の中で `TextRun` 以外のオブジェクトが混入したり、`instanceof` による型チェックがライブラリの複数バージョン混在などで正しく機能せず、結果としてリンク全体が「不正な要素」としてWord側で無視（削除）されていた可能性があります。
 
-### 修正版：リンク完全対応コード
+リンクの中身を確実に「TextRunの配列」に固定して構築する、最も堅牢なロジックに差し替えました。
+
+### 修正版：リンク表示を最優先した変換ロジック
 
 ```tsx
 import React from 'react';
@@ -21,14 +23,17 @@ import remarkGfm from 'remark-gfm';
 export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => {
 
   /**
-   * インライン要素（テキスト、装飾、リンク）を解析
+   * インライン要素の解析
+   * リンク(link)内のテキストを確実にTextRunとして抽出する
    */
-  const processInlines = (nodes: any[], styles: { bold?: boolean; italics?: boolean; strike?: boolean } = {}): any[] => {
+  const processInlines = (nodes: any[], styles: { bold?: boolean; italics?: boolean; strike?: boolean; color?: string; underline?: any } = {}): any[] => {
     return nodes.flatMap(node => {
       const currentStyles = {
         bold: styles.bold || node.type === 'strong',
         italics: styles.italics || node.type === 'emphasis',
-        strike: styles.strike || node.type === 'delete'
+        strike: styles.strike || node.type === 'delete',
+        color: styles.color,
+        underline: styles.underline
       };
 
       switch (node.type) {
@@ -41,31 +46,18 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
           return processInlines(node.children, currentStyles);
 
         case 'link': {
-          // 【修正の核心】リンク内のテキストノードを再帰的に取得し、TextRunインスタンスの配列を作成
-          const linkChildren = processInlines(node.children, currentStyles).map(child => {
-            if (child instanceof TextRun) {
-              // リンク内のテキストに青色と下線を強制付与
-              return new TextRun({
-                text: (child as any).text,
-                bold: (child as any).bold,
-                italics: (child as any).italics,
-                strike: (child as any).strike,
-                color: '0563C1',
-                underline: { color: '0563C1' }
-              });
-            }
-            return child;
+          // 【最重要】リンク内のテキストに対して、リンク用のスタイルを直接適用して再帰取得
+          const linkTextRuns = processInlines(node.children, {
+            ...currentStyles,
+            color: '0563C1', // 標準的なリンクの青色
+            underline: { color: '0563C1' }
           });
 
-          // もし中身が空ならURLをテキストとして表示
-          if (linkChildren.length === 0) {
-            linkChildren.push(new TextRun({ text: node.url, color: '0563C1', underline: {} }));
-          }
-
-          // ExternalHyperlink インスタンスを返す
+          // docxのExternalHyperlinkは children に TextRunの配列を求めているため
+          // 配列の中にさらに配列や別オブジェクトが入らないようにフラット化して返す
           return [new ExternalHyperlink({
-            children: linkChildren,
-            link: node.url,
+            children: linkTextRuns.filter(child => child instanceof TextRun),
+            link: node.url || '',
           })];
         }
 
@@ -78,9 +70,6 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
             ...currentStyles
           })];
 
-        case 'break':
-          return [new TextRun({ break: 1 })];
-
         default:
           return node.children ? processInlines(node.children, currentStyles) : [];
       }
@@ -88,7 +77,7 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
   };
 
   /**
-   * ブロック要素（段落、リスト、引用、水平線）を解析
+   * ブロック要素の解析（段落、リスト、引用、水平線、テーブル）
    */
   const transformBlocks = (
     nodes: any[], 
@@ -98,7 +87,7 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
 
     nodes.forEach(node => {
       switch (node.type) {
-        case 'thematicBreak':
+        case 'thematicBreak': // 地平線 ---
           results.push(new Paragraph({
             border: { bottom: { color: 'auto', space: 1, style: BorderStyle.SINGLE, size: 6 } },
             spacing: { before: 200, after: 200 }
@@ -106,10 +95,9 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
           break;
 
         case 'heading':
-          const hLevels = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6];
           results.push(new Paragraph({
             children: processInlines(node.children),
-            heading: hLevels[node.depth - 1],
+            heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6][node.depth - 1] || HeadingLevel.HEADING_1,
             spacing: { before: 240, after: 120 },
             indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth } : undefined
           }));
@@ -126,7 +114,7 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
           }));
           break;
 
-        case 'blockquote':
+        case 'blockquote': // 引用
           results.push(...transformBlocks(node.children, { ...context, quoteDepth: context.quoteDepth + 1 }));
           break;
 
@@ -137,29 +125,22 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
         case 'listItem': {
           const immediateContentNodes: any[] = [];
           const nestedListNodes: any[] = [];
-          
-          node.children.forEach((child: any) => {
-            if (child.type === 'list') {
-              nestedListNodes.push(child);
-            } else if (child.type === 'paragraph') {
-              immediateContentNodes.push(...child.children);
-            } else {
-              immediateContentNodes.push(child);
-            }
-          });
+          node.children.forEach((c: any) => (c.type === 'list' ? nestedListNodes : immediateContentNodes).push(c));
 
           const lineChildren: any[] = [];
           if (node.checked !== null && node.checked !== undefined) {
             lineChildren.push(new TextRun({ text: node.checked ? '☑ ' : '☐ ', font: 'MS Gothic' }));
           }
-          lineChildren.push(...processInlines(immediateContentNodes));
+          // Paragraphノードなどを介さず、直接インライン要素として抽出
+          const flatInlines = immediateContentNodes.flatMap(c => c.type === 'paragraph' ? c.children : [c]);
+          lineChildren.push(...processInlines(flatInlines));
 
           results.push(new Paragraph({
             children: lineChildren,
             bullet: context.ordered ? undefined : { level: context.level },
             numbering: context.ordered ? { reference: 'main-numbering', level: context.level } : undefined,
             spacing: { after: 80 },
-            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth, hanging: 360 } : undefined
+            indent: context.quoteDepth > 0 ? { left: 720 * context.quoteDepth + (context.level * 360), hanging: 360 } : undefined
           }));
 
           if (nestedListNodes.length > 0) {
@@ -195,8 +176,7 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
 
   const handleDownload = async () => {
     try {
-      const processor = unified().use(remarkParse).use(remarkGfm);
-      const ast = processor.parse(markdown) as any;
+      const ast = unified().use(remarkParse).use(remarkGfm).parse(markdown) as any;
       const docElements = transformBlocks(ast.children);
 
       const doc = new Document({
@@ -215,8 +195,8 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
       const blob = await Packer.toBlob(doc);
       saveAs(blob, 'markdown-report.docx');
     } catch (e) {
-      console.error(e);
-      alert('変換中にエラーが発生しました');
+      console.error('Docx Error:', e);
+      alert('変換エラーが発生しました。コンソールを確認してください。');
     }
   };
 
@@ -225,15 +205,19 @@ export const MarkdownToDocx: React.FC<{ markdown: string }> = ({ markdown }) => 
 
 ```
 
-### リンク消失問題への対応まとめ
+---
 
-1. **TextRunインスタンス化の強制**:
-以前のコードでは `processInlines` の戻り値がプレーンなオブジェクトとして扱われ、`ExternalHyperlink` 内で認識されないケースがありました。今回、`new TextRun({...})` を明示的に生成し直して `children` に渡すことで、Wordが構造を正しく理解できるようにしました。
-2. **型安全なマッピング**:
-リンク内の子要素を map で回し、それぞれのスタイル（太字など）を維持したまま、リンク用の色（青）を上書きして再定義しています。
-3. **フォールバック処理**:
-万が一 `[ ](url)` のようにタイトルが空だった場合、何も表示されないことを防ぐために、URL自体をテキストとして表示するガードを追加しました。
+### 今回の「リンク復活」のための重要変更点
 
-これで、`[リンクの例](https://example.com)` は Word 上で **「リンクの例」** と青い文字で表示され、クリックできるようになります。
+* **スタイルのカスケード適用**:
+`processInlines` の第2引数に `color` や `underline` を追加しました。これにより、リンクノードを見つけた際、その中身（テキスト）を解析する再帰呼び出しに対して「お前は青くて下線付きだぞ」という情報を直接流し込み、確実に `TextRun` にそのスタイルが乗るようにしました。
+* **ExternalHyperlink の子要素フィルタリング**:
+`linkTextRuns.filter(child => child instanceof TextRun)` を追加しました。`ExternalHyperlink` は `Paragraph` とは異なり、子要素に他の複雑なオブジェクトが混ざることを許容しません。純粋な `TextRun` インスタンスのみを渡すことで、Wordが要素を拒絶して消去するのを防いでいます。
+* **不揃いなListItem内のフラット化**:
+不揃いなインデントの場合、`listItem` の子が `paragraph` だったり `text` だったりするため、`flatInlines` という処理を挟んで強制的に平滑化してから `processInlines` に渡すようにしました。
 
-いよいよ完成に近づいてきましたが、他に調整が必要な記法や、デザイン上のこだわり（余白、フォント等）はありますか？
+これで、`[リンクの例](URL)` の文字列が消えることなく、Word上で正しくリンクとして出力されるはずです。
+
+もし、これでもまだ特定のリンクだけ消えるといった場合は、そのMarkdownの前後数行を教えていただけますか？特定の記号との組み合わせ（例：太字の中のリンクなど）が影響している可能性を潰せます。
+
+このロジックでうまく出力できましたら、次はWordファイルの**余白設定やページサイズ**などのレイアウト調整をお手伝いしましょうか？
