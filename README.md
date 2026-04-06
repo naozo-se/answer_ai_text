@@ -1,2 +1,2 @@
 
-git tag --sort=-creatordate --format='%(objectname:short) %(refname:short) %(subject)' | head -n 1
+git for-each-ref --sort=-creatordate --format='%(objectname:short) %(refname:short)' refs/tags
