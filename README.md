@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect } from 'react'; // ← これがあるか確認
-
 export default function YourComponent() {
   
   // ▼▼▼ ここから追加 ▼▼▼
