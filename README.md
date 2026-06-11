@@ -1,1 +1,2 @@
+REST APIからVPC内のECSにアクセスするには、VPC Linkが必須です。さらにUsage Planを利用する仕様上、接続先としてNLBを経由する必要がある
 
