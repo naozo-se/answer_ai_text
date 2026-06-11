@@ -1,1 +1,1 @@
-API GatewayからVPC内のECSへ接続するにはVPC Linkが必要で、Usage Planを利用している都合上、その接続先はNLBに限定されるみたいです。
+
